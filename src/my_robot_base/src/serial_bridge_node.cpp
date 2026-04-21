@@ -132,6 +132,8 @@ private:
     const float wheel_sep_y_ = 0.198f / 2.0f; 
     const float factor_      = wheel_sep_x_ + wheel_sep_y_; 
 
+    bool first_data_ = true;
+
     // --- 独立接收线程：实时读取串口缓存 ---
     void receiveLoop() {
         uint8_t temp_buf[256];
@@ -177,7 +179,7 @@ private:
         }
     }
 
-    // --- ⭐⭐⭐ 核心修改区：发送下位机速度 (移除了死区补偿) ---
+    // 核心修改区：发送下位机速度 (移除了死区补偿) ---
     void sendVelToMCU(float vx, float vy, float wz) {
         // 1. 整体底盘速度安全上限限幅
         double linear_speed = std::hypot(vx, vy);
@@ -246,6 +248,13 @@ private:
     // --- 单片机数据解包后，推导 ODOM 与 TF，发布 ROS 话题 ---
     void publishData(const RobotData& data) {
         rclcpp::Time current_time = this->now();
+        // 增加初次运行防跳变保护
+        if (first_data_) {
+            last_time_ = current_time;
+            first_data_ = false;
+            return; // 第一帧只对齐时间戳，不进行轨迹推演
+        }
+        
         double dt = (current_time - last_time_).seconds();
         last_time_ = current_time;
 
