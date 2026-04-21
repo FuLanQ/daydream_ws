@@ -37,7 +37,9 @@ public:
         this->declare_parameter<int>("cmd_timeout_ms", 500);
         this->declare_parameter<double>("max_linear_vel", 1.5);
         this->declare_parameter<double>("max_angular_vel", 3.0);
-        this->declare_parameter<double>("min_wheel_vel", 500.0); // 每个轮子的独立起步死区 (mm/s)
+        
+        // 这里的 min_wheel_vel 保留参数读取，防止你的老 launch 文件报错，但后续计算中不再使用
+        this->declare_parameter<double>("min_wheel_vel", 500.0); 
 
         port_name_       = this->get_parameter("port").as_string();
         baudrate_        = this->get_parameter("baudrate").as_int();
@@ -80,8 +82,9 @@ public:
             serial_.set_option(boost::asio::serial_port_base::parity(boost::asio::serial_port_base::parity::none));
             serial_.set_option(boost::asio::serial_port_base::flow_control(boost::asio::serial_port_base::flow_control::none));
 
-            RCLCPP_INFO(this->get_logger(), "底层驱动已启动 | 端口: %s | 跨越死区门限自动映射: %.1f mm/s", 
-                        port_name_.c_str(), min_wheel_vel_);
+            // ⭐ 提示文本修改：告知开发者死区已剥离
+            RCLCPP_INFO(this->get_logger(), "底层驱动已启动 | 端口: %s | 目标轮速绝对诚实下发 (已移除上位机死区)", 
+                        port_name_.c_str());
             
             // 启动独立串口接收线程
             receive_thread_ = std::thread(&SerialTestNode::receiveLoop, this);
@@ -174,7 +177,7 @@ private:
         }
     }
 
-    // --- 核心：发送下位机速度（带死区映射与麦轮逆解） ---
+    // --- ⭐⭐⭐ 核心修改区：发送下位机速度 (移除了死区补偿) ---
     void sendVelToMCU(float vx, float vy, float wz) {
         // 1. 整体底盘速度安全上限限幅
         double linear_speed = std::hypot(vx, vy);
@@ -191,31 +194,18 @@ private:
         float lb = (vx + vy - wz * factor_) * 1000.0f;
         float rb = (vx - vy + wz * factor_) * 1000.0f;
 
-        // 3. ⭐区段映射控制法则（针对单个独立轮子避开物理死区与单片机断电区）
-        const float MAX_SPEED_MCU = 5500.0f; // 与下位机 PID 算法统一量程极限
-
-        auto apply_deadzone_mapping = [&](float speed) -> float {
-            // 如果上位机真的没有速度指令（或极其微小），全量清零发给单片机停车
-            if (std::abs(speed) < 1.0f) return 0.0f; 
-            
-            float sign = (speed > 0) ? 1.0f : -1.0f;
-            float abs_speed = std::abs(speed);
-            
-            // 安全限制：不可以超出电机能承受的最大转速
-            if (abs_speed > MAX_SPEED_MCU) abs_speed = MAX_SPEED_MCU;
-            
-            // 将理论的 [0, MAX_SPEED_MCU] 范围内任意速度，平移缩放到有效作功区 [min_wheel_vel_, MAX_SPEED_MCU]
-            // 以保证：只要轮子需要转动，指令一定 > 500（也就是 > pid.c 里的 100 与物理静摩擦区段）
-            float mapped_speed = min_wheel_vel_ + abs_speed * ((MAX_SPEED_MCU - min_wheel_vel_) / MAX_SPEED_MCU);
-            
-            return sign * mapped_speed;
+        // 3. 基础安全钳位保护 (不再进行虚假的死区映射放大)
+        const float MAX_SPEED_MCU = 5500.0f; // 保护极值极限
+        auto limit_speed = [&](float speed) -> float {
+            if (speed > MAX_SPEED_MCU) return MAX_SPEED_MCU;
+            if (speed < -MAX_SPEED_MCU) return -MAX_SPEED_MCU;
+            return speed; // 回归最本质的原汁原味目标速度！
         };
 
-        // 对每一个独立轮子进行过滤应用映射
-        lf = apply_deadzone_mapping(lf);
-        rf = apply_deadzone_mapping(rf);
-        lb = apply_deadzone_mapping(lb);
-        rb = apply_deadzone_mapping(rb);
+        lf = limit_speed(lf);
+        rf = limit_speed(rf);
+        lb = limit_speed(lb);
+        rb = limit_speed(rb);
 
         // 4. 组装数据通过串口发送给下位机
         uint8_t tx_buf[21];
@@ -235,7 +225,7 @@ private:
         boost::asio::write(serial_, boost::asio::buffer(tx_buf, 21));
     }
 
-    // --- ROS cmv_vel 回调 ---
+    // --- ROS cmd_vel 回调 ---
     void cmdVelCallback(const geometry_msgs::msg::Twist::SharedPtr msg) {
         last_cmd_time_ = this->now();
         is_stopped_ = false;
@@ -247,7 +237,6 @@ private:
         if (!is_stopped_) {
             auto current_time = this->now();
             if ((current_time - last_cmd_time_).seconds() * 1000.0 > cmd_timeout_ms_) {
-                // 如果发现长时间没收到前置节点的控制指令，强制发全零刹停底盘
                 sendVelToMCU(0.0, 0.0, 0.0);
                 is_stopped_ = true;
             }
@@ -278,10 +267,8 @@ private:
         
         imu_msg.orientation.x = 0; imu_msg.orientation.y = 0; 
         imu_msg.orientation.z = 0; imu_msg.orientation.w = 1;
-        // 把朝向的协方差设为-1，告诉EKF该IMU暂无地磁计推算绝对航向
         imu_msg.orientation_covariance[0] = -1.0; 
         
-        // 【关键】：极低的角速度协方差，强制配合上位机的 EKF 配置
         imu_msg.angular_velocity_covariance[0] = 1e-4;
         imu_msg.angular_velocity_covariance[4] = 1e-4;
         imu_msg.angular_velocity_covariance[8] = 1e-4; 
@@ -350,7 +337,6 @@ private:
         odom_msg.twist.twist.linear.y = vy;
         odom_msg.twist.twist.angular.z = vth;
         
-        // 提供合理方差：角速度方差拉大，让 EKF 更加相信 IMU
         odom_msg.twist.covariance[0]  = 1e-3;   
         odom_msg.twist.covariance[7]  = 1e-3;   
         odom_msg.twist.covariance[35] = 1e-1;   
