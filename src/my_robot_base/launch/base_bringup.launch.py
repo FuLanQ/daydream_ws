@@ -20,7 +20,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'port': '/dev/ttyACM0',   
-            'baudrate': 921600,
+            'baudrate': 115200,
             'publish_tf': False,      
             'cmd_timeout_ms': 500,
             'max_linear_vel': 1.5,
