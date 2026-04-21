@@ -1,0 +1,41 @@
+ekf_filter_node:
+  ros__parameters:
+    # 频率设定为50Hz进行融合
+    frequency: 50.0  
+    
+    # 强制在 2D 平面计算，无视 Z轴、Roll 和 Pitch
+    two_d_mode: true 
+
+    # 声明坐标系
+    map_frame: map
+    odom_frame: odom          # 融合后的原点坐标系
+    base_link_frame: base_link
+    world_frame: odom         # 里程计模式，世界原点就是起始点
+
+    # 我们关闭了单独底层发送TF的参数，这里由EKF接管发送高质量TF广播
+    publish_tf: true          
+
+    # ================= 传感器 1: 纯轮速里程计 =================
+    odom0: /wheel/odometry
+    # 我们只取轮子计算的 线速度X、线速度Y 以及 角速度Yaw
+    # 矩阵顺序: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    # 我们不在这个节点直接使用差分模型，因为麦轮不算是标准差分
+    odom0_differential: false 
+
+    # ================= 传感器 2: IMU 陀螺仪 =================
+    imu0: /imu/data_raw
+    # 我们只取 IMU 最精确的数据：Z轴角速度 (Yaw Velocity)
+    # 因为我们在代码里给了它 1e-4 的协方差，所以 EKF 会 100% 相信 IMU 旋转，而不信轮子旋转
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    # 移除由于小车不平或启动晃动引发的重力加速度干扰
+    imu0_remove_gravitational_acceleration: false
