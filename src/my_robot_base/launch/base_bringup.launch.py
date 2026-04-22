@@ -56,9 +56,27 @@ def generate_launch_description():
         parameters=[ekf_config_path]
     )
 
+    # 6. 摄像头节点 (新增)
+    camera_node = Node(
+        package='usb_cam',
+        executable='usb_cam_node_exe',
+        name='usb_cam',
+        output='screen',
+        parameters=[{
+            'video_device': '/dev/video0',
+            'image_width': 320,
+            'image_height': 240,
+            'framerate': 5.0,
+            'pixel_format': 'yuyv',
+            'camera_name': 'default_cam',
+            'io_method': 'mmap'
+        }]
+    )
+
     return LaunchDescription([
         base_node,
         robot_state_publisher_node,
         joint_state_publisher_node,
-        ekf_node
+        ekf_node,
+        camera_node  # 将摄像头添加到启动队列
     ])
