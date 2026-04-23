@@ -1,4 +1,4 @@
-image: my_map.pgm
+image: /app/daydream_ws/src/my_robot_base/maps/my_map.pgm
 mode: trinary
 resolution: 0.05
 origin: [-4.06, -1.75, 0]
